@@ -145,6 +145,7 @@ local defaults = {
             cooldownFontEffect = "OUTLINE",
             cooldownFont = "Friz Quadrata TT",
             tooltips = true,
+            maxDebuffs = 4,
             enemy = true,
             friendly = true,
             npc = true,
@@ -904,18 +905,25 @@ function BigDebuffs:Refresh()
         frame.cooldown.noCooldownCount = not self.db.profile.unitFrames.cooldownCount
         self:UNIT_AURA(unit)
     end
-    for unit, frame in pairs(self.Nameplates) do
-        frame:Hide()
-        frame.current = nil
-        if self.db.profile.unitFrames.cooldownCount then
-            local text = frame.cooldown:GetRegions()
-            if text then
-                text:SetFont(LibSharedMedia:Fetch("font", BigDebuffs.db.profile.unitFrames.cooldownFont),
-                    self.db.profile.unitFrames.cooldownFontSize, self.db.profile.unitFrames.cooldownFontEffect)
+    for unit, frames in pairs(self.Nameplates) do
+        if frames then
+            for i = 1, #frames do
+                local frame = frames[i]
+                if frame then
+                    frame:Hide()
+                    frame.current = nil
+                    if self.db.profile.nameplates.cooldownCount then
+                        local text = frame.cooldown:GetRegions()
+                        if text then
+                            text:SetFont(LibSharedMedia:Fetch("font", BigDebuffs.db.profile.nameplates.cooldownFont),
+                                self.db.profile.nameplates.cooldownFontSize, self.db.profile.nameplates.cooldownFontEffect)
+                        end
+                    end
+                    frame.cooldown:SetHideCountdownNumbers(not self.db.profile.nameplates.cooldownCount)
+                    frame.cooldown.noCooldownCount = not self.db.profile.nameplates.cooldownCount
+                end
             end
         end
-        frame.cooldown:SetHideCountdownNumbers(not self.db.profile.unitFrames.cooldownCount)
-        frame.cooldown.noCooldownCount = not self.db.profile.unitFrames.cooldownCount
         self:UNIT_AURA_NAMEPLATE(unit)
     end
 end
@@ -1085,47 +1093,42 @@ function BigDebuffs:AttachUnitFrame(unit)
 end
 
 function BigDebuffs:AttachNameplate(unit)
-    local frame = self.Nameplates[unit]
-    if (not frame or frame:IsForbidden()) then
+    local frames = self.Nameplates[unit]
+    if (not frames or not frames[1]) then
         return
     end
 
     local config = self.db.profile.nameplates
-
-    if config.cooldownCount then
-        local text = frame.cooldown:GetRegions()
-        if text then
-            text:SetFont(LibSharedMedia:Fetch("font", config.cooldownFont),
-                config.cooldownFontSize, config.cooldownFontEffect)
-        end
-    end
-    frame.cooldown:SetHideCountdownNumbers(not config.cooldownCount)
-    frame.cooldown.noCooldownCount = not config.cooldownCount
-
-    frame:EnableMouse(config.tooltips)
 
     local anchorStyle = "enemyAnchor"
     if (not UnitCanAttack("player", unit) and config["friendlyAnchor"].friendlyAnchorEnabled == true) then
         anchorStyle = "friendlyAnchor"
     end
 
-    frame:ClearAllPoints()
-    if config[anchorStyle].anchor == "RIGHT" then
-        frame:SetPoint("LEFT", frame.anchor, "RIGHT", config[anchorStyle].x, config[anchorStyle].y)
-    elseif config[anchorStyle].anchor == "TOP" then
-        frame:SetPoint("BOTTOM", frame.anchor, "TOP", config[anchorStyle].x, config[anchorStyle].y)
-    elseif config[anchorStyle].anchor == "LEFT" then
-        frame:SetPoint("RIGHT", frame.anchor, "LEFT", config[anchorStyle].x, config[anchorStyle].y)
-    elseif config[anchorStyle].anchor == "BOTTOM" then
-        frame:SetPoint("TOP", frame.anchor, "BOTTOM", config[anchorStyle].x, config[anchorStyle].y)
-    end
+    local size = config[anchorStyle].size
 
-    frame:SetSize(config[anchorStyle].size, config[anchorStyle].size)
-    -- If Masque is installed then apply skin.
-    if Masque ~= nil then
-        BigDebuffs.MasqueGroup.NamePlate:AddButton(frame)
-        -- No idea why I need to re-skin, but this fixes the size...
-        BigDebuffs.MasqueGroup.NamePlate:ReSkin(frame.Icon)
+    for i = 1, #frames do
+        local frame = frames[i]
+        if frame and not frame:IsForbidden() then
+            if config.cooldownCount then
+                local text = frame.cooldown:GetRegions()
+                if text then
+                    text:SetFont(LibSharedMedia:Fetch("font", config.cooldownFont),
+                        config.cooldownFontSize, config.cooldownFontEffect)
+                end
+            end
+            frame.cooldown:SetHideCountdownNumbers(not config.cooldownCount)
+            frame.cooldown.noCooldownCount = not config.cooldownCount
+
+            frame:EnableMouse(config.tooltips)
+            frame:SetSize(size, size)
+
+            -- If Masque is installed then apply skin.
+            if Masque ~= nil then
+                BigDebuffs.MasqueGroup.NamePlate:AddButton(frame)
+                BigDebuffs.MasqueGroup.NamePlate:ReSkin(frame.Icon)
+            end
+        end
     end
 end
 
@@ -2232,13 +2235,14 @@ function BigDebuffs:UNIT_AURA_NAMEPLATE(unit)
     if not self.db.profile.nameplates.enabled then return end
     self:AttachNameplate(unit)
 
-    local frame = self.Nameplates[unit]
-    if not frame then return end
+    local frames = self.Nameplates[unit]
+    if not frames then return end
 
     local UnitDebuff = BigDebuffs.test and UnitDebuffTest or UnitDebuff
+    local maxDebuffs = self.db.profile.nameplates.maxDebuffs or 4
 
     local now = GetTime()
-    local left, priority, duration, expires, icon, debuff, buff, interrupt = 0, 0
+    local auras = {}
 
     for i = 1, 40 do
         -- Check debuffs
@@ -2255,45 +2259,49 @@ function BigDebuffs:UNIT_AURA_NAMEPLATE(unit)
                 local reaction = caster and UnitReaction("player", caster) or 0
                 local friendlySmokeBomb = id == 212183 and reaction > 4
                 local p = self:GetNameplatesPriority(id)
-                if p and p >= priority and not friendlySmokeBomb then
-                    if p > priority or self:IsPriorityBigDebuff(id) or e == 0 or e - now > left then
-                        left = e - now
-                        duration = d
-                        debuff = i
-                        priority = p
-                        expires = e
-                        icon = n
-                    end
+                if p and not friendlySmokeBomb then
+                    table.insert(auras, {
+                        priority = p,
+                        duration = d,
+                        expires = e,
+                        icon = n,
+                        index = i,
+                        buff = false,
+                        interrupt = nil,
+                        spellId = id
+                    })
                 end
             end
         end
 
         -- Check buffs
+        local bn, bi, bd, be, bcaster, bid
         if LibClassicDurations then
-            _, n, _, _, d, e, caster, _, _, id = LibClassicDurations:UnitAura(unit, i, "HELPFUL")
+            _, bn, _, _, bd, be, bcaster, _, _, bid = LibClassicDurations:UnitAura(unit, i, "HELPFUL")
         else
-            _, n, _, _, d, e, caster, _, _, id = AuraUtil.UnpackAuraData(UnitBuff(unit, i))
+            _, bn, _, _, bd, be, bcaster, _, _, bid = AuraUtil.UnpackAuraData(UnitBuff(unit, i))
         end
-        if id then
-            if self.Spells[id] then
+        if bid then
+            if self.Spells[bid] then
                 if LibClassicDurations then
-                    local durationNew, expirationTimeNew = LibClassicDurations:GetAuraDurationByUnit(unit, id, caster)
-                    if d == 0 and durationNew then
-                        d = durationNew
-                        e = expirationTimeNew
+                    local durationNew, expirationTimeNew = LibClassicDurations:GetAuraDurationByUnit(unit, bid, bcaster)
+                    if bd == 0 and durationNew then
+                        bd = durationNew
+                        be = expirationTimeNew
                     end
                 end
-                local p = self:GetNameplatesPriority(id)
-                if p and p >= priority then
-                    if p > priority or self:IsPriorityBigDebuff(id) or e == 0 or e - now > left then
-                        left = e - now
-                        duration = d
-                        debuff = i
-                        priority = p
-                        expires = e
-                        icon = n
-                        buff = true
-                    end
+                local p = self:GetNameplatesPriority(bid)
+                if p then
+                    table.insert(auras, {
+                        priority = p,
+                        duration = bd,
+                        expires = be,
+                        icon = bn,
+                        index = i,
+                        buff = true,
+                        interrupt = nil,
+                        spellId = bid
+                    })
                 end
             end
         end
@@ -2305,47 +2313,96 @@ function BigDebuffs:UNIT_AURA_NAMEPLATE(unit)
         local spell = self.units[guid]
         local spellId = spell.spellId
         local p = self:GetNameplatesPriority(spellId)
-        if p and p >= priority then
-            left = spell.expires - now
-            duration = self.Spells[spellId].duration
-            debuff = spellId
-            expires = spell.expires
-            icon = GetSpellTexture(spellId)
-            interrupt = spellId
+        if p then
+            table.insert(auras, {
+                priority = p,
+                duration = self.Spells[spellId].duration,
+                expires = spell.expires,
+                icon = GetSpellTexture(spellId),
+                index = spellId,
+                buff = false,
+                interrupt = spellId,
+                spellId = spellId
+            })
         end
     end
 
-
-    if debuff then
-        if duration < 1 then duration = 1 end -- auras like Solar Beam don't have a duration
-
-        if frame.current ~= icon then
-            frame.icon:SetTexture(icon)
+    -- Sort by priority (highest first), then by remaining time
+    table.sort(auras, function(a, b)
+        if a.priority ~= b.priority then
+            return a.priority > b.priority
         end
+        return (a.expires or 0) > (b.expires or 0)
+    end)
 
-        frame.cooldown:SetCooldown(expires - duration, duration)
-        frame:Show()
-        frame.cooldown:SetSwipeColor(0, 0, 0, 0.6)
+    -- Count how many auras we'll actually show
+    local visibleCount = math.min(#auras, maxDebuffs)
 
-        -- set for tooltips
-        frame:SetID(debuff)
-        frame.buff = buff
-        frame.interrupt = interrupt
-        frame.current = icon
-    else
-        frame:Hide()
-        frame.current = nil
+    -- Get positioning config
+    local config = self.db.profile.nameplates
+    local anchorStyle = "enemyAnchor"
+    if (not UnitCanAttack("player", unit) and config["friendlyAnchor"].friendlyAnchorEnabled == true) then
+        anchorStyle = "friendlyAnchor"
+    end
+    local size = config[anchorStyle].size
+    local spacing = 2
+
+    -- Calculate total width and starting offset for centering
+    local totalWidth = (visibleCount * size) + ((visibleCount - 1) * spacing)
+    local startOffset = -totalWidth / 2 + size / 2
+
+    -- Display the top auras up to maxDebuffs
+    for i = 1, #frames do
+        local frame = frames[i]
+        local aura = auras[i]
+
+        frame:ClearAllPoints()
+
+        if aura and i <= maxDebuffs then
+            local duration = aura.duration
+            if duration < 1 then duration = 1 end
+
+            if frame.current ~= aura.icon then
+                frame.icon:SetTexture(aura.icon)
+            end
+
+            frame.cooldown:SetCooldown(aura.expires - duration, duration)
+            frame:Show()
+            frame.cooldown:SetSwipeColor(0, 0, 0, 0.6)
+
+            frame:SetID(aura.index)
+            frame.buff = aura.buff
+            frame.interrupt = aura.interrupt
+            frame.current = aura.icon
+
+            -- Position this frame centered
+            local xOffset = startOffset + (i - 1) * (size + spacing) + config[anchorStyle].x
+            if config[anchorStyle].anchor == "RIGHT" then
+                frame:SetPoint("CENTER", frame.anchor, "RIGHT", xOffset + totalWidth / 2, config[anchorStyle].y)
+            elseif config[anchorStyle].anchor == "TOP" then
+                frame:SetPoint("BOTTOM", frame.anchor, "TOP", xOffset, config[anchorStyle].y)
+            elseif config[anchorStyle].anchor == "LEFT" then
+                frame:SetPoint("CENTER", frame.anchor, "LEFT", xOffset - totalWidth / 2, config[anchorStyle].y)
+            elseif config[anchorStyle].anchor == "BOTTOM" then
+                frame:SetPoint("TOP", frame.anchor, "BOTTOM", xOffset, config[anchorStyle].y)
+            end
+        else
+            frame:Hide()
+            frame.current = nil
+        end
     end
 
-    --Hide/Disable auras which shouldn't be shown. Seems to fix false icons from appearing and getting stuck.
-    if frame.current ~= nil and (not unit:find("nameplate")
+    -- Hide/Disable auras which shouldn't be shown
+    if (not unit:find("nameplate")
         or (not UnitCanAttack("player", unit) and not self.db.profile.nameplates.friendly)
         or (UnitCanAttack("player", unit) and not self.db.profile.nameplates.enemy)
         or (not UnitIsPlayer(unit) and not self.db.profile.nameplates.npc)
         or (UnitIsUnit("player", unit)))
     then
-        frame:Hide()
-        frame.current = nil
+        for i = 1, #frames do
+            frames[i]:Hide()
+            frames[i].current = nil
+        end
     end
 end
 
@@ -2377,50 +2434,62 @@ function BigDebuffs:NAME_PLATE_UNIT_ADDED(_, unit)
 
     if not frame or not anchor or frame:IsForbidden() then return end
 
+    local maxDebuffs = self.db.profile.nameplates.maxDebuffs or 4
+
     if not frame.BigDebuffs then
-        frame.BigDebuffs = CreateFrame("Button", "$parent.BigDebuffs", frame)
-        frame.BigDebuffs:SetFrameLevel(frame:GetFrameLevel())
-
-        frame.BigDebuffs.icon = frame.BigDebuffs:CreateTexture("$parent.Icon", "OVERLAY", nil, 3)
-        frame.BigDebuffs.icon:SetAllPoints(frame.BigDebuffs)
-
-        frame.BigDebuffs.cooldown = CreateFrame("Cooldown", "$parent.Cooldown", frame.BigDebuffs, "CooldownFrameTemplate")
-        frame.BigDebuffs.cooldown:SetAllPoints(frame.BigDebuffs)
-        frame.BigDebuffs.cooldown:SetDrawEdge(false)
-        frame.BigDebuffs.cooldown:SetAlpha(1)
-        frame.BigDebuffs.cooldown:SetDrawBling(false)
-        frame.BigDebuffs.cooldown:SetDrawSwipe(true)
-        frame.BigDebuffs.cooldown:SetReverse(true)
-
-        frame.BigDebuffs:SetScript("OnEnter", function(self)
-            if NamePlateTooltip:IsForbidden() then return end
-            if (BigDebuffs.db.profile.nameplates.tooltips) then
-                NamePlateTooltip:SetOwner(self, "ANCHOR_RIGHT", 0, 0);
-                if self.interrupt then
-                    NamePlateTooltip:SetSpellByID(self.interrupt)
-                elseif self.buff then
-                    NamePlateTooltip:SetUnitBuff(self.unit, self:GetID());
-                else
-                    NamePlateTooltip:SetUnitDebuff(self.unit, self:GetID());
-                end
-            elseif NamePlateTooltip:IsOwned(self) then
-                NamePlateTooltip:Hide();
-            end
-        end)
-
-        frame.BigDebuffs:SetScript("OnLeave", function()
-            if NamePlateTooltip:IsForbidden() then return end
-            NamePlateTooltip:Hide()
-        end)
+        frame.BigDebuffs = {}
     end
 
-    frame.BigDebuffs.anchor = anchor
+    -- Create frames for each debuff slot
+    for i = 1, maxDebuffs do
+        if not frame.BigDebuffs[i] then
+            local debuffFrame = CreateFrame("Button", "$parent.BigDebuffs" .. i, frame)
+            debuffFrame:SetFrameLevel(frame:GetFrameLevel())
+
+            debuffFrame.icon = debuffFrame:CreateTexture("$parent.Icon", "OVERLAY", nil, 3)
+            debuffFrame.icon:SetAllPoints(debuffFrame)
+
+            debuffFrame.cooldown = CreateFrame("Cooldown", "$parent.Cooldown", debuffFrame, "CooldownFrameTemplate")
+            debuffFrame.cooldown:SetAllPoints(debuffFrame)
+            debuffFrame.cooldown:SetDrawEdge(false)
+            debuffFrame.cooldown:SetAlpha(1)
+            debuffFrame.cooldown:SetDrawBling(false)
+            debuffFrame.cooldown:SetDrawSwipe(true)
+            debuffFrame.cooldown:SetReverse(true)
+
+            debuffFrame:SetScript("OnEnter", function(self)
+                if NamePlateTooltip:IsForbidden() then return end
+                if (BigDebuffs.db.profile.nameplates.tooltips) then
+                    NamePlateTooltip:SetOwner(self, "ANCHOR_RIGHT", 0, 0);
+                    if self.interrupt then
+                        NamePlateTooltip:SetSpellByID(self.interrupt)
+                    elseif self.buff then
+                        NamePlateTooltip:SetUnitBuff(self.unit, self:GetID());
+                    else
+                        NamePlateTooltip:SetUnitDebuff(self.unit, self:GetID());
+                    end
+                elseif NamePlateTooltip:IsOwned(self) then
+                    NamePlateTooltip:Hide();
+                end
+            end)
+
+            debuffFrame:SetScript("OnLeave", function()
+                if NamePlateTooltip:IsForbidden() then return end
+                NamePlateTooltip:Hide()
+            end)
+
+            frame.BigDebuffs[i] = debuffFrame
+        end
+
+        frame.BigDebuffs[i].anchor = anchor
+        frame.BigDebuffs[i].unit = unit
+    end
 
     self.Nameplates[unit] = frame.BigDebuffs
 
-    frame.BigDebuffs.unit = unit
-    frame.BigDebuffs:RegisterUnitEvent("UNIT_AURA", unit)
-    frame.BigDebuffs:SetScript("OnEvent", function()
+    -- Register event only on the first frame
+    frame.BigDebuffs[1]:RegisterUnitEvent("UNIT_AURA", unit)
+    frame.BigDebuffs[1]:SetScript("OnEvent", function()
         self:UNIT_AURA_NAMEPLATE(unit)
     end)
 
@@ -2430,14 +2499,19 @@ function BigDebuffs:NAME_PLATE_UNIT_ADDED(_, unit)
 end
 
 function BigDebuffs:NAME_PLATE_UNIT_REMOVED(_, unit)
-    local frame = self.Nameplates[unit]
+    local frames = self.Nameplates[unit]
 
     -- Seems like a good idea to remove old nameplate frames from the group.
-    if Masque ~= nil then
-        BigDebuffs.MasqueGroup.NamePlate:RemoveButton(frame)
+    if frames then
+        for i = 1, #frames do
+            if Masque ~= nil then
+                BigDebuffs.MasqueGroup.NamePlate:RemoveButton(frames[i])
+            end
+        end
+        if frames[1] then
+            frames[1]:UnregisterEvent("UNIT_AURA")
+        end
     end
-
-    if frame then frame:UnregisterEvent("UNIT_AURA") end
 
     for i = 1, #unitsWithRaid do
         if (unitsWithRaid[i] == unit) then
